@@ -75,4 +75,4 @@ OCR_PROCESS_INTERVAL_FRAMES = 15  # Process OCR every 15 frames for performance
 # ==========================================
 TTS_RATE = 160           # Words per minute
 TTS_VOLUME = 1.0         # 0.0 to 1.0
-TTS_COOLDOWN_SECONDS = 4 # Time before repeating the exact same audio output
+TTS_COOLDOWN_SECONDS = 2 # Time before repeating the exact same audio output

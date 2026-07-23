@@ -1,81 +1,84 @@
 """
-Non-blocking Text-To-Speech System using pyttsx3 and Queue Threading.
-Prevents main UI frame lag and handles cooldown logic.
+EyeCan Native Windows Speech Engine - Smart Duplicate Suppression
 """
 
-import pyttsx3
 import threading
 import queue
 import time
 import logging
+import win32com.client
+import pythoncom
 
-from config import TTS_RATE, TTS_VOLUME, TTS_COOLDOWN_SECONDS
+from config import TTS_COOLDOWN_SECONDS
 
 logging.basicConfig(level=logging.INFO)
 
 class SpeechEngine:
     def __init__(self):
-        """Initialize worker thread, audio queue, and TTS cooldown tracking."""
         self.speech_queue = queue.Queue()
-        self.history = {}  # Format: {phrase: last_spoken_timestamp}
+        self.last_spoken_text = None
+        self.last_spoken_time = 0
         self.running = True
 
-        # Start dedicated speech thread
+        # Start isolated worker thread
         self.thread = threading.Thread(target=self._speech_worker, daemon=True)
         self.thread.start()
 
     def _speech_worker(self):
-        """Worker thread loop. Keeps pyttsx3 isolated from OpenCV main thread."""
+        """Worker thread using Windows Native SAPI with COM initialization."""
+        pythoncom.CoInitialize()
+
         try:
-            # Initialize pyttsx3 inside thread to prevent COM concurrency crashes on Windows
-            engine = pyttsx3.init()
-            engine.setProperty('rate', TTS_RATE)
-            engine.setProperty('volume', TTS_VOLUME)
+            speaker = win32com.client.Dispatch("SAPI.SpVoice")
         except Exception as e:
-            logging.error(f"Failed to initialize pyttsx3 engine: {e}")
-            return
+            logging.error(f"Failed to initialize Windows SAPI Voice: {e}")
+            speaker = None
 
         while self.running:
             try:
-                # Wait for text from queue (timeout allows checking self.running flag)
-                text = self.speech_queue.get(timeout=0.2)
-                if text:
-                    engine.say(text)
-                    engine.runAndWait()
+                text = self.speech_queue.get(timeout=0.1)
+                if text and speaker:
+                    print(f"=== [SPEAKING NOW]: {text} ===")
+                    speaker.Speak(text, 0)
+
                 self.speech_queue.task_done()
             except queue.Empty:
                 continue
             except Exception as e:
-                logging.error(f"Error in TTS execution worker: {e}")
+                logging.error(f"Error in TTS worker: {e}")
+        
+        pythoncom.CoUninitialize()
 
     def speak(self, text: str, force: bool = False):
         """
-        Public method to queue speech output with cooldown check.
-        
-        Args:
-            text (str): Phrasing to be spoken.
-            force (bool): If True, bypasses cooldown checks.
+        Only speaks if:
+        1. It's a NEW phrase (different from the last spoken phrase), OR
+        2. 'force=True' is passed, OR
+        3. A extended re-announce interval has elapsed (e.g., 10 seconds).
         """
         if not text or not text.strip():
             return
 
         text = text.strip()
         current_time = time.time()
-        last_time = self.history.get(text, 0)
 
-        # Check cooldown constraint
-        if force or (current_time - last_time >= TTS_COOLDOWN_SECONDS):
-            self.history[text] = current_time
-            # Keep queue short (clear stale backlog)
+        # Re-announce the same static object only after 10 seconds, but announce new objects instantly
+        repeat_interval = 10.0 if not force else 0.0
+
+        if (text != self.last_spoken_text) or (current_time - self.last_spoken_time >= repeat_interval):
+            self.last_spoken_text = text
+            self.last_spoken_time = current_time
+
+            # Clear backlog queue
             while not self.speech_queue.empty():
                 try:
                     self.speech_queue.get_nowait()
                 except queue.Empty:
                     break
+
             self.speech_queue.put(text)
 
     def stop(self):
-        """Gracefully terminate worker thread."""
         self.running = False
         if self.thread.is_alive():
             self.thread.join(timeout=1.0)

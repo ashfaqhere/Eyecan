@@ -1,63 +1,52 @@
 """
-Optical Character Recognition (OCR) Engine powered by EasyOCR.
-Extracts readable text from signboards, store names, exit signs, etc.
+EyeCan OCR Reader Module - Optimized for Signboard & Text Reading
 """
 
 import cv2
-import numpy as np
 import easyocr
+import numpy as np
 import logging
-
-from config import OCR_LANGUAGES, OCR_CONF_THRESHOLD
 
 logging.basicConfig(level=logging.INFO)
 
 class OCRReader:
-    def __init__(self):
-        """Initialize EasyOCR Reader instance."""
-        try:
-            logging.info("Initializing EasyOCR Model (CPU)...")
-            self.reader = easyocr.Reader(OCR_LANGUAGES, gpu=False)
-        except Exception as e:
-            logging.error(f"Failed to initialize EasyOCR: {e}")
-            raise e
+    def __init__(self, gpu=False):
+        # Initialize EasyOCR reader for English
+        logging.info("Initializing EasyOCR Engine...")
+        self.reader = easyocr.Reader(['en'], gpu=gpu)
 
     def read_text(self, frame: np.ndarray):
-        """
-        Process frame and detect printed text.
-        
-        Args:
-            frame (np.ndarray): OpenCV input frame.
-            
-        Returns:
-            tuple: (annotated_frame, extracted_string or None)
-        """
         annotated_frame = frame.copy()
-        extracted_text_list = []
+        clean_extracted_words = []
 
         try:
-            # Convert frame to RGB format required by EasyOCR
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = self.reader.readtext(rgb_frame)
+            # 1. Preprocess: Convert to Grayscale & Contrast Boost for outdoor signs
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            # 2. Run EasyOCR Detection
+            results = self.reader.readtext(gray)
 
             for (bbox, text, prob) in results:
-                if prob >= OCR_CONF_THRESHOLD and len(text.strip()) > 2:
-                    clean_text = text.strip()
-                    extracted_text_list.append(clean_text)
+                # Only process confident text readings (> 35% confidence)
+                if prob > 0.35:
+                    cleaned_word = text.strip()
+                    # Ignore random tiny noise (require at least 2 characters)
+                    if len(cleaned_word) >= 2:
+                        clean_extracted_words.append(cleaned_word)
 
-                    # Polygon bounds conversion
-                    pts = np.array(bbox, np.int32).reshape((-1, 1, 2))
-                    cv2.polylines(annotated_frame, [pts], isClosed=True, color=(255, 0, 0), thickness=2)
-                    
-                    # Compute top-left corner for text rendering
-                    top_left = tuple(map(int, bbox[0]))
-                    cv2.putText(
-                        annotated_frame, clean_text, (top_left[0], max(top_left[1] - 5, 20)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2
-                    )
+                        # Draw bounding box on frame
+                        (top_left, top_right, bottom_right, bottom_left) = bbox
+                        top_left = (int(top_left[0]), int(top_left[1]))
+                        bottom_right = (int(bottom_right[0]), int(bottom_right[1]))
+
+                        cv2.rectangle(annotated_frame, top_left, bottom_right, (0, 255, 0), 2)
+                        cv2.putText(
+                            annotated_frame, cleaned_word, (top_left[0], max(top_left[1] - 10, 15)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+                        )
 
         except Exception as e:
             logging.error(f"Error executing OCR reader: {e}")
 
-        final_text = " ".join(extracted_text_list) if extracted_text_list else None
+        final_text = " ".join(clean_extracted_words) if clean_extracted_words else None
         return annotated_frame, final_text
